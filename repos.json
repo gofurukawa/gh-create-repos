@@ -1,0 +1,12 @@
+{
+  "org": "your-org-name",
+  "repos": [
+    {
+      "name": "repo-name-01",
+      "admin": ["alice", "bob"],
+      "admin_team": ["leads-team"],
+      "write": ["charlie"],
+      "write_team": ["dev-team", "qa-team"]
+    }
+  ]
+}
