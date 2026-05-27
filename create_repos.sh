@@ -6,7 +6,45 @@
 # =============================================================================
 set -euo pipefail
 
-CONFIG="${1:-$(dirname "$0")/repos.json}"
+# =============================================================================
+# 引数パース
+# =============================================================================
+ADD_PERMISSIONS=false
+POSITIONAL=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --add-permissions)
+      ADD_PERMISSIONS=true
+      shift
+      ;;
+    -h|--help)
+      cat <<'EOS'
+使い方: create_repos.sh [--add-permissions] [CONFIG]
+
+  --add-permissions  既存リポジトリに対しても権限付与処理を実行する。
+                     リポジトリ作成はスキップし、JSON に記載した権限を
+                     追加・更新する。JSON にない既存の権限は変更しない。
+  CONFIG             設定ファイルパス (デフォルト: ./repos.json)
+EOS
+      exit 0
+      ;;
+    --)
+      shift
+      POSITIONAL+=("$@")
+      break
+      ;;
+    -*)
+      echo "未知のオプション: $1" >&2
+      exit 1
+      ;;
+    *)
+      POSITIONAL+=("$1")
+      shift
+      ;;
+  esac
+done
+
+CONFIG="${POSITIONAL[0]:-$(dirname "$0")/repos.json}"
 
 # =============================================================================
 # ログ出力
@@ -39,11 +77,18 @@ jq -e '[.repos[] | .name | type == "string" and length > 0] | all' "${CONFIG}" >
 ORG="$(jq -r '.org' "${CONFIG}")"
 REPO_COUNT="$(jq '.repos | length' "${CONFIG}")"
 
+if [[ "${ADD_PERMISSIONS}" == "true" ]]; then
+  MODE_LABEL="権限のみ追加（既存リポジトリも対象）"
+else
+  MODE_LABEL="通常（既存リポジトリはスキップ）"
+fi
+
 echo "========================================"
 echo " GitHub リポジトリ一括作成"
 echo " Config : ${CONFIG}"
 echo " Org    : ${ORG}"
 echo " Repos  : ${REPO_COUNT} 個"
+echo " Mode   : ${MODE_LABEL}"
 echo "========================================"
 echo ""
 
@@ -88,26 +133,35 @@ echo ""
 
 # =============================================================================
 # リポジトリ1件の処理
-#   return 0: 成功
+#   return 0: 成功（新規作成 + 権限付与）
 #   return 2: 既存のためスキップ
+#   return 3: 既存リポジトリへの権限付与のみ成功
 #   return 1: 失敗
 # =============================================================================
 process_repo() {
   local index="$1"
-  local repo user team
+  local repo user team exists=false
   repo="$(jq -r ".repos[${index}].name" "${CONFIG}")"
   echo "----------------------------------------"
   log_info "処理中: ${ORG}/${repo}"
 
   if gh repo view "${ORG}/${repo}" &>/dev/null; then
-    log_info "  → すでに存在するためスキップ"
-    return 2
+    exists=true
   fi
 
-  # 1. リポジトリ作成（gh 側でデフォルト README を同時に作成）
-  gh repo create "${ORG}/${repo}" --private --add-readme 2>&1 | sed 's/^/  /' \
-    || { log_err "  リポジトリ作成に失敗"; return 1; }
-  log_ok "  リポジトリ作成完了"
+  if [[ "${exists}" == "true" ]]; then
+    if [[ "${ADD_PERMISSIONS}" == "true" ]]; then
+      log_info "  → 既存リポジトリのため作成をスキップし、権限付与のみ実行"
+    else
+      log_info "  → すでに存在するためスキップ"
+      return 2
+    fi
+  else
+    # 1. リポジトリ作成（gh 側でデフォルト README を同時に作成）
+    gh repo create "${ORG}/${repo}" --private --add-readme 2>&1 | sed 's/^/  /' \
+      || { log_err "  リポジトリ作成に失敗"; return 1; }
+    log_ok "  リポジトリ作成完了"
+  fi
 
   # 2. admin（個人）
   while IFS= read -r user; do
@@ -149,13 +203,16 @@ process_repo() {
     log_ok "  write 付与（チーム）: ${team}"
   done < <(jq -r ".repos[${index}].write_team[]?" "${CONFIG}")
 
+  if [[ "${exists}" == "true" ]]; then
+    return 3
+  fi
   return 0
 }
 
 # =============================================================================
 # メインループ
 # =============================================================================
-SUCCESS=(); FAILED=(); SKIPPED=()
+SUCCESS=(); FAILED=(); SKIPPED=(); UPDATED=()
 
 for i in $(seq 0 $((REPO_COUNT - 1))); do
   REPO="$(jq -r ".repos[${i}].name" "${CONFIG}")"
@@ -166,6 +223,7 @@ for i in $(seq 0 $((REPO_COUNT - 1))); do
   case "${rc}" in
     0) SUCCESS+=("${REPO}") ;;
     2) SKIPPED+=("${REPO}") ;;
+    3) UPDATED+=("${REPO}") ;;
     *) FAILED+=("${REPO}") ;;
   esac
   echo ""
@@ -179,6 +237,10 @@ echo " 完了サマリー"
 echo "========================================"
 echo "  成功:     ${#SUCCESS[@]} 件"
 for r in "${SUCCESS[@]}"; do echo "    ✓ ${r}"; done
+if [[ ${#UPDATED[@]} -gt 0 ]]; then
+  echo "  権限更新: ${#UPDATED[@]} 件"
+  for r in "${UPDATED[@]}"; do echo "    ↻ ${r}"; done
+fi
 if [[ ${#SKIPPED[@]} -gt 0 ]]; then
   echo "  スキップ: ${#SKIPPED[@]} 件"
   for r in "${SKIPPED[@]}"; do echo "    - ${r}"; done
