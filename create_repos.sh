@@ -235,8 +235,10 @@ done
 echo "========================================"
 echo " 完了サマリー"
 echo "========================================"
-echo "  成功:     ${#SUCCESS[@]} 件"
-for r in "${SUCCESS[@]}"; do echo "    ✓ ${r}"; done
+echo "  リポジトリ作成: ${#SUCCESS[@]} 件"
+if [[ ${#SUCCESS[@]} -gt 0 ]]; then
+  for r in "${SUCCESS[@]}"; do echo "    ✓ ${r}"; done
+fi
 if [[ ${#UPDATED[@]} -gt 0 ]]; then
   echo "  権限更新: ${#UPDATED[@]} 件"
   for r in "${UPDATED[@]}"; do echo "    ↻ ${r}"; done
